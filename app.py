@@ -7,6 +7,18 @@ import tempfile
 import requests
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from tensorflow.keras.applications.vgg16 import preprocess_input
+import hashlib
+
+
+from firebase_admin import credentials, firestore
+import firebase_admin
+
+# Inisialisasi Firebase Admin SDK
+cred = credentials.Certificate("key.json")
+firebase_admin.initialize_app(cred)
+
+# Dapatkan referensi ke Firestore
+db = firestore.client()
 
 app = Flask(__name__)
 
@@ -78,10 +90,16 @@ def predict():
         # Convert to JSON for the response
         result = data.to_dict(orient='records')
 
+        # Simpan hasil prediksi ke Firestore
+        predictions_ref = db.collection('predictions')
+        for record in result:
+            predictions_ref.add(record)
+
         return jsonify(result), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/', methods=['POST'])
@@ -104,10 +122,45 @@ def image_predict():
     predicted_class = labels[yhat.argmax()]
     confidence = yhat.max()
 
+    # Simpan hasil prediksi ke Firestore
+    image_predictions_ref = db.collection('image_predictions')
+    image_predictions_ref.add({
+        'prediction': predicted_class,
+        'confidence': confidence * 100,
+        'image_name': imagefile.filename
+    })
+
     return jsonify({
         "prediction": predicted_class,
         "confidence": f"{confidence * 100:.2f}%"
     })
+
+@app.route('/register', methods=['POST'])
+def register_user():
+    try:
+        # Parse JSON request data
+        user_data = request.json
+
+        # Validate input data
+        if not user_data or 'name' not in user_data or 'email' not in user_data or 'password' not in user_data:
+            return jsonify({'error': 'Invalid input data'}), 400
+
+        # Encrypt password (this example uses a simple hash; use a secure hashing algorithm like bcrypt for production)
+        hashed_password = hashlib.sha256(user_data['password'].encode()).hexdigest()
+
+        # Create a new user document
+        user_ref = db.collection('users').add({
+            'name': user_data['name'],
+            'email': user_data['email'],
+            'password': hashed_password  # Simpan password yang sudah dienkripsi
+        })
+
+        return jsonify({'message': 'User registered successfully', 'user_id': user_ref.id}), 201
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 
 
 if __name__ == '__main__':
